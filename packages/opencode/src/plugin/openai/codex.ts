@@ -503,36 +503,6 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
       },
       methods: [
         {
-          label: "ChatGPT Pro/Plus (browser)",
-          type: "oauth",
-          authorize: async () => {
-            const { redirectUri } = await startOAuthServer()
-            const pkce = await generatePKCE()
-            const state = base64UrlEncode(crypto.getRandomValues(new Uint8Array(32)).buffer)
-            const authUrl = buildAuthorizeUrl(redirectUri, pkce, state)
-
-            const callbackPromise = waitForOAuthCallback(pkce, state)
-
-            return {
-              url: authUrl,
-              instructions: "Complete authorization in your browser. This window will close automatically.",
-              method: "auto" as const,
-              callback: async () => {
-                const tokens = await callbackPromise
-                stopOAuthServer()
-                const accountId = extractAccountId(tokens)
-                return {
-                  type: "success" as const,
-                  refresh: tokens.refresh_token,
-                  access: tokens.access_token,
-                  expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
-                  accountId,
-                }
-              },
-            }
-          },
-        },
-        {
           label: "ChatGPT Pro/Plus (headless)",
           type: "oauth",
           authorize: async () => {

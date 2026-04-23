@@ -657,40 +657,6 @@ export async function XaiAuthPlugin(input: PluginInput, options: XaiAuthPluginOp
       },
       methods: [
         {
-          label: "xAI Grok OAuth (SuperGrok Subscription)",
-          type: "oauth",
-          authorize: async () => {
-            await startOAuthServer()
-            const pkce = await generatePKCE()
-            const state = generateState()
-            const nonce = generateState()
-            const authUrl = buildAuthorizeUrl(pkce, state, nonce, options)
-
-            const callbackPromise = waitForOAuthCallback(pkce, state)
-
-            return {
-              url: authUrl,
-              instructions: "Complete authorization in your browser. This window will close automatically.",
-              method: "auto" as const,
-              callback: async () => {
-                try {
-                  const tokens = await callbackPromise
-                  return {
-                    type: "success" as const,
-                    refresh: tokens.refresh_token,
-                    access: tokens.access_token,
-                    expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
-                  }
-                } catch (err) {
-                  return { type: "failed" as const }
-                } finally {
-                  stopOAuthServer()
-                }
-              },
-            }
-          },
-        },
-        {
           // RFC 8628 device-code flow. The CLI prints a verification URL
           // and a short user_code that the user enters in a browser on
           // any device. No loopback callback server runs on the CLI host,

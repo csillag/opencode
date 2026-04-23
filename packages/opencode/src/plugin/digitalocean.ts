@@ -330,50 +330,6 @@ export async function DigitalOceanAuthPlugin(input: PluginInput): Promise<Hooks>
       provider: "digitalocean",
       methods: [
         {
-          type: "oauth",
-          label: "Login with DigitalOcean",
-          async authorize() {
-            await startOAuthServer()
-            const state = generateState()
-            const callbackPromise = waitForOAuthCallback(state)
-            const url = buildAuthorizeUrl(state)
-            await open(url).catch(() => undefined)
-            return {
-              url,
-              instructions:
-                "Sign in to DigitalOcean in your browser. OpenCode will use your DigitalOcean API token directly for inference and load your Inference Routers. Re-run /connect to refresh routers later.",
-              method: "auto" as const,
-              async callback() {
-                try {
-                  const tokens = await callbackPromise
-                  const routerResult = await listRouters(tokens.access_token)
-                  const routers = routerResult.ok ? routerResult.routers : []
-                  if (!routerResult.ok) {
-                  }
-                  return {
-                    type: "success" as const,
-                    provider: "digitalocean",
-                    key: tokens.access_token,
-                    metadata: {
-                      oauth_access: tokens.access_token,
-                      oauth_expires: String(Date.now() + tokens.expires_in * 1000),
-                      oauth_scopes: OAUTH_SCOPES,
-                      routers: JSON.stringify(
-                        routers.map((r) => ({ name: r.name, uuid: r.uuid, description: r.description })),
-                      ),
-                      routers_fetched_at: String(Date.now()),
-                    },
-                  }
-                } catch (err) {
-                  return { type: "failed" as const }
-                } finally {
-                  stopOAuthServer()
-                }
-              },
-            }
-          },
-        },
-        {
           type: "api",
           label: "Paste Model Access Key",
         },
