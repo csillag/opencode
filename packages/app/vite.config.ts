@@ -21,6 +21,10 @@ const sentry =
 
 export default defineConfig({
   plugins: [desktopPlugin, sentry] as any,
+  // Relative base so the built SPA can be served under any URL subpath
+  // (iframe embedding via reverse proxy) without requiring absolute-path
+  // asset resolution at the host origin.  Also works for direct-serve at `/`.
+  base: "./",
   server: {
     host: "0.0.0.0",
     allowedHosts: true,
