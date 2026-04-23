@@ -12,8 +12,14 @@ const embeddedUIPromise = Flag.OPENCODE_DISABLE_EMBEDDED_WEB_UI
 
 export const UI_UPSTREAM = new URL("https://app.opencode.ai")
 
+// `'unsafe-eval'` is required because Zod 4 (workspace catalog `zod@4.1.8`)
+// JIT-compiles validators at schema-definition time via `new Function(...)`.
+// Every `z.object({...})` in the SPA bundle hits this; `'wasm-unsafe-eval'`
+// alone (which Firefox correctly distinguishes) is not sufficient. Removing
+// this requires switching the `app` package to `zod/mini` or downgrading to
+// zod 3 — both larger refactors.
 export const csp = (hash = "") =>
-  `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; media-src 'self' data:; connect-src * data:`
+  `default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; media-src 'self' data:; connect-src * data:`
 export const DEFAULT_CSP = csp()
 
 export function themePreloadHash(body: string) {

@@ -100,6 +100,14 @@ if (!(root instanceof HTMLElement) && import.meta.env.DEV) {
 }
 
 const getCurrentUrl = () => {
+  // Honor the localStorage `defaultServerUrl` override if set so that the
+  // initial `servers[0]` entry matches the `defaultServer` key; otherwise
+  // `allServers().find(...)` in the server context falls back to
+  // `allServers()[0]` and the SDK ends up calling `location.origin` for
+  // control-plane ("/global/*") routes even when the user configured a
+  // different server URL via localStorage.
+  const lsDefault = readDefaultServerUrl()
+  if (lsDefault) return lsDefault
   if (location.hostname.includes("opencode.ai")) return "http://localhost:4096"
   if (import.meta.env.DEV)
     return `http://${import.meta.env.VITE_OPENCODE_SERVER_HOST ?? "localhost"}:${import.meta.env.VITE_OPENCODE_SERVER_PORT ?? "4096"}`
