@@ -406,6 +406,23 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
     ),
   )
 
+  // Anthropic 1h-TTL writes cost 2× base input (vs 1.25× for 5m) — see
+  // https://docs.claude.com/en/docs/build-with-claude/prompt-caching for the multipliers.
+  // models.dev's cost.cache.write is the 5m rate, so apply 1.6× (= 2.0 / 1.25) on top
+  // of cost.cache.write for the 1h portion. Anthropic returns the split under
+  // metadata.<provider>.usage.cache_creation when 1h-ttl breakpoints are used.
+  const rawAnthropicUsage = (input.metadata?.["anthropic"]?.["usage"] ??
+    input.metadata?.["vertex"]?.["usage"] ??
+    null) as { cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number } } | null
+  const cacheCreation = rawAnthropicUsage?.cache_creation ?? null
+  const cacheWriteInputTokens1h = safe(Number(cacheCreation?.ephemeral_1h_input_tokens ?? 0))
+  // 5m is the default TTL when no breakdown is reported, so default to the full write count.
+  const cacheWriteInputTokens5m = safe(
+    cacheCreation?.ephemeral_5m_input_tokens != null
+      ? Number(cacheCreation.ephemeral_5m_input_tokens)
+      : cacheWriteInputTokens - cacheWriteInputTokens1h,
+  )
+
   // AI SDK v6 normalized inputTokens to include cached tokens across all providers
   // (including Anthropic/Bedrock which previously excluded them). Always subtract cache
   // tokens to get the non-cached input count for separate cost calculation.
@@ -432,6 +449,16 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
     (input.model.cost?.experimentalOver200K && contextTokens > 200_000
       ? input.model.cost.experimentalOver200K
       : input.model.cost)
+  // Bill cache writes by TTL: 5m at the catalog cache.write rate (1.25× base input),
+  // 1h at 1.6× that rate (= 2.0 / 1.25). Catalog only carries one cache.write number,
+  // so use it as the 5m anchor and derive 1h from it. Avoids needing a schema change
+  // in models.dev. If the provider returns no cache_creation breakdown, the entire
+  // write is billed as 5m, which matches pre-1h-TTL behaviour exactly.
+  const cacheWriteRate5m = new Decimal(costInfo?.cache?.write ?? 0)
+  const cacheWriteCost = cacheWriteRate5m
+    .mul(cacheWriteInputTokens5m)
+    .add(cacheWriteRate5m.mul(cacheWriteInputTokens1h).mul("1.6"))
+    .div(1_000_000)
   const totalNanoAiu = input.metadata?.["copilot"]?.["totalNanoAiu"]
   return {
     cost:
@@ -442,7 +469,7 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
               .add(new Decimal(tokens.input).mul(costInfo?.input ?? 0).div(1_000_000))
               .add(new Decimal(tokens.output).mul(costInfo?.output ?? 0).div(1_000_000))
               .add(new Decimal(tokens.cache.read).mul(costInfo?.cache?.read ?? 0).div(1_000_000))
-              .add(new Decimal(tokens.cache.write).mul(costInfo?.cache?.write ?? 0).div(1_000_000))
+              .add(cacheWriteCost)
               // TODO: update models.dev to have better pricing model, for now:
               // charge reasoning tokens at the same rate as output tokens
               .add(new Decimal(tokens.reasoning).mul(costInfo?.output ?? 0).div(1_000_000))

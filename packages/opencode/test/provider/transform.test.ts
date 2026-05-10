@@ -2481,6 +2481,58 @@ describe("ProviderTransform.message - cache control on gateway", () => {
       },
     })
   })
+
+  test("anthropic with model.options.cacheTTL='1h' adds ttl to ephemeral cacheControl", () => {
+    const model = {
+      ...createModel({
+        providerID: "anthropic",
+        api: {
+          id: "claude-sonnet-4",
+          url: "https://api.anthropic.com",
+          npm: "@ai-sdk/anthropic",
+        },
+      }),
+      options: { cacheTTL: "1h" },
+    }
+    const msgs = [
+      { role: "system", content: "You are a helpful assistant" },
+      { role: "user", content: "Hello" },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, model, {}) as any[]
+
+    expect(result[0].providerOptions).toEqual({
+      anthropic: { cacheControl: { type: "ephemeral", ttl: "1h" } },
+      openrouter: { cacheControl: { type: "ephemeral", ttl: "1h" } },
+      bedrock: { cachePoint: { type: "default" } },
+      openaiCompatible: { cache_control: { type: "ephemeral", ttl: "1h" } },
+      copilot: { copilot_cache_control: { type: "ephemeral" } },
+      alibaba: { cacheControl: { type: "ephemeral", ttl: "1h" } },
+    })
+  })
+
+  test("anthropic with model.options.cacheTTL='5m' omits ttl (backward-compat)", () => {
+    const model = {
+      ...createModel({
+        providerID: "anthropic",
+        api: {
+          id: "claude-sonnet-4",
+          url: "https://api.anthropic.com",
+          npm: "@ai-sdk/anthropic",
+        },
+      }),
+      options: { cacheTTL: "5m" },
+    }
+    const msgs = [
+      { role: "system", content: "You are a helpful assistant" },
+      { role: "user", content: "Hello" },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, model, {}) as any[]
+
+    expect(result[0].providerOptions.anthropic).toEqual({ cacheControl: { type: "ephemeral" } })
+    expect(result[0].providerOptions.bedrock).toEqual({ cachePoint: { type: "default" } })
+  })
 })
 
 describe("ProviderTransform.temperature - Cohere North", () => {

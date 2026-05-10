@@ -324,24 +324,31 @@ function applyCaching(msgs: ModelMessage[], model: Provider.Model): ModelMessage
   const system = msgs.filter((msg) => msg.role === "system").slice(0, 2)
   const final = msgs.filter((msg) => msg.role !== "system").slice(-2)
 
+  // Anthropic-family TTL knob. "1h" doubles cache_write cost (2× base input price)
+  // vs "5m" default (1.25×) but keeps the prefix alive across longer idle gaps.
+  // AI SDK passes ttl through verbatim. Bedrock cachePoint has no ttl knob; copilot
+  // cache schema is unverified, leave default.
+  const ttl = model.options?.["cacheTTL"] === "1h" ? "1h" : undefined
+  const ephemeralWithTtl = ttl ? { type: "ephemeral", ttl } : { type: "ephemeral" }
+
   const providerOptions = {
     anthropic: {
-      cacheControl: { type: "ephemeral" },
+      cacheControl: ephemeralWithTtl,
     },
     openrouter: {
-      cacheControl: { type: "ephemeral" },
+      cacheControl: ephemeralWithTtl,
     },
     bedrock: {
       cachePoint: { type: "default" },
     },
     openaiCompatible: {
-      cache_control: { type: "ephemeral" },
+      cache_control: ephemeralWithTtl,
     },
     copilot: {
       copilot_cache_control: { type: "ephemeral" },
     },
     alibaba: {
-      cacheControl: { type: "ephemeral" },
+      cacheControl: ephemeralWithTtl,
     },
   }
 
