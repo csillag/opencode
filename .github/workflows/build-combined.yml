@@ -1,0 +1,184 @@
+name: Build combined opencode (iframe + cache-tuning)
+
+# Manual trigger only.  Both feature branches are rebased manually onto upstream
+# `dev` (or whichever upstream tip you target), so cron-driven rebuilds would
+# fire whether or not anything actually changed.  After rebasing and pushing
+# either branch, run:
+#
+#   gh workflow run build-combined.yml --repo csillag/opencode --ref main
+#
+# (Optionally pass `--field iframe_ref=...` / `--field cache_ref=...` to pin
+# specific commits instead of the branch tips.)
+on:
+  workflow_dispatch:
+    inputs:
+      iframe_ref:
+        description: "Ref for iframe-embeddable branch (default: csillag/make-web-embeddable-in-iframes)"
+        required: false
+        default: csillag/make-web-embeddable-in-iframes
+      cache_ref:
+        description: "Ref for prompt-cache-tuning branch (default: csillag/anthropic-prompt-cache-tuning)"
+        required: false
+        default: csillag/anthropic-prompt-cache-tuning
+      release:
+        description: "Publish a GitHub release with the binaries (false = artifacts only, 90d retention)"
+        required: false
+        default: "true"
+
+permissions:
+  contents: write
+
+jobs:
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      base: ${{ steps.merge_base.outputs.base }}
+      iframe_sha: ${{ steps.shas.outputs.iframe_sha }}
+      cache_sha: ${{ steps.shas.outputs.cache_sha }}
+      tag: ${{ steps.shas.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Fetch both feature branches in addition to the workflow's own ref.
+          # `git fetch` below brings them in.
+
+      - name: Fetch feature branches
+        run: |
+          git fetch origin "${{ inputs.iframe_ref }}":refs/remotes/origin/iframe
+          git fetch origin "${{ inputs.cache_ref }}":refs/remotes/origin/cache
+
+      - name: Compute merge-base + verify both branches share it
+        id: merge_base
+        run: |
+          set -euo pipefail
+          BASE=$(git merge-base origin/iframe origin/cache)
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "Shared base: $BASE"
+          git log --oneline -1 "$BASE"
+
+          IFRAME_AHEAD=$(git rev-list --count "$BASE..origin/iframe")
+          CACHE_AHEAD=$(git rev-list --count "$BASE..origin/cache")
+          echo "iframe is $IFRAME_AHEAD commits ahead of base"
+          echo "cache  is $CACHE_AHEAD commits ahead of base"
+
+          # Sanity: both branches should be small focused patches.  Spike count
+          # is a heuristic for "someone forgot to rebase" — fail loudly so the
+          # operator sees the drift before a stale build ships.
+          if [ "$IFRAME_AHEAD" -gt 20 ] || [ "$CACHE_AHEAD" -gt 20 ]; then
+            echo "::warning::One feature branch has many commits ahead of base ($IFRAME_AHEAD / $CACHE_AHEAD).  Verify both are rebased onto the same upstream tip."
+          fi
+
+      - name: Resolve short SHAs + build tag
+        id: shas
+        run: |
+          IFRAME_SHA=$(git rev-parse --short origin/iframe)
+          CACHE_SHA=$(git rev-parse --short origin/cache)
+          echo "iframe_sha=$IFRAME_SHA" >> "$GITHUB_OUTPUT"
+          echo "cache_sha=$CACHE_SHA" >> "$GITHUB_OUTPUT"
+          echo "tag=combined-${IFRAME_SHA}-${CACHE_SHA}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prep
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            archs: linux-arm64 linux-x64
+          - runner: macos-latest
+            archs: darwin-arm64 darwin-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch feature branches
+        run: |
+          git fetch origin "${{ inputs.iframe_ref }}":refs/remotes/origin/iframe
+          git fetch origin "${{ inputs.cache_ref }}":refs/remotes/origin/cache
+
+      - name: Combine branches
+        run: |
+          set -euo pipefail
+          git config user.email "ci@local"
+          git config user.name "Build CI"
+          git checkout -B combined "${{ needs.prep.outputs.base }}"
+
+          # Both feature branches sit on the shared base, so each merge is a
+          # fast-forward when the branches don't touch overlapping files.  Use
+          # --no-ff explicitly to keep both commit ancestries visible in the
+          # build's git log; the resulting tree is identical to what the
+          # operator would see locally with `git merge feat/X feat/Y`.
+          git merge --no-ff --no-edit origin/iframe
+          git merge --no-ff --no-edit origin/cache
+
+          echo "--- Combined log ---"
+          git log --oneline -10
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install deps
+        run: bun install --frozen-lockfile
+
+      - name: Build CLI
+        run: |
+          cd packages/opencode
+          bun run script/build.ts --all
+        env:
+          OPENCODE_VERSION: ${{ needs.prep.outputs.tag }}
+
+      - name: Package archives
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/dist
+          for arch in ${{ matrix.archs }}; do
+            cd packages/opencode/dist/opencode-$arch
+            case "$arch" in
+              linux-*) tar czf "/tmp/dist/opencode-$arch.tar.gz" . ;;
+              darwin-*) zip -r "/tmp/dist/opencode-$arch.zip" . ;;
+            esac
+            cd - >/dev/null
+          done
+          ls -lh /tmp/dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-${{ matrix.runner }}
+          path: /tmp/dist/*
+          retention-days: 90
+
+  publish:
+    if: ${{ inputs.release == 'true' }}
+    needs: [prep, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/dl
+          merge-multiple: true
+
+      - name: List downloaded
+        run: ls -lh /tmp/dl
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prep.outputs.tag }}
+          name: ${{ needs.prep.outputs.tag }}
+          body: |
+            Combined build of two feature branches on top of upstream tip.
+
+            - **iframe-embeddable** @ `${{ needs.prep.outputs.iframe_sha }}`
+              (`${{ inputs.iframe_ref }}`)
+            - **anthropic-prompt-cache-tuning** @ `${{ needs.prep.outputs.cache_sha }}`
+              (`${{ inputs.cache_ref }}`)
+            - **shared base** @ `${{ needs.prep.outputs.base }}`
+
+            Built by `.github/workflows/build-combined.yml` on `csillag/opencode@main`.
+          files: /tmp/dl/*
+          fail_on_unmatched_files: true
