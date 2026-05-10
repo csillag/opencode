@@ -73,19 +73,27 @@ Note any uncommitted changes — do **not** stash without telling the user.
 
 ## Step 1 — Discover the latest upstream release tag
 
+**Canonical form — query upstream's GH releases directly.**  Bypasses both
+the SIGPIPE-under-pipefail trap and the local-tag-contamination trap (this
+fork's own `v1.14.45-csillag.<sha>.<sha>` release tags out-sort upstream
+`v1.14.45` under git's `v:refname` sort, because git's semver-pre-release
+ordering is inverted from real semver).
+
 ```sh
-# Interactive shell: piping through head is fine.
-LATEST=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -1)
+LATEST=$(gh release view --repo anomalyco/opencode --json tagName -q .tagName)
 echo "Latest upstream release: $LATEST"
 ```
 
-In strict-mode scripts (`set -euo pipefail`), the pipe-to-head pattern can
-exit 141 when `head` closes the pipe before `git tag` has finished writing.
-Use the no-pipe form instead:
+If `gh` is unavailable, fall back to the local-tag-only query but only after
+explicitly fetching upstream tags into a clean refs namespace and excluding
+this fork's tags by strict semver pattern:
 
 ```sh
-LATEST=$(git for-each-ref --count=1 --sort='-v:refname' \
-           --format='%(refname:short)' 'refs/tags/v[0-9]*')
+LATEST=$(git ls-remote --tags --refs upstream 'v*' \
+  | awk '{sub(/refs\/tags\//,"",$2); print $2}' \
+  | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+  | sort -V \
+  | tail -1)
 ```
 
 Cross-check against the GitHub Releases API to make sure your local tags are
@@ -326,10 +334,9 @@ cd ~/deai/opencode
 git fetch upstream --tags --prune
 git fetch origin
 
-# Avoid `git tag -l ... | head -1` here — under `set -o pipefail` the
-# closed-pipe SIGPIPE from `head` propagates as exit 141.
-LATEST=$(git for-each-ref --count=1 --sort='-v:refname' \
-           --format='%(refname:short)' 'refs/tags/v[0-9]*')
+# gh release view bypasses both pitfalls: no SIGPIPE, no local-tag pollution
+# from this fork's own `v<X>-csillag.<sha>.<sha>` release tags.  See Step 1.
+LATEST=$(gh release view --repo anomalyco/opencode --json tagName -q .tagName)
 echo "Rebasing both feature branches onto $LATEST"
 
 for BR in csillag/make-web-embeddable-in-iframes csillag/anthropic-prompt-cache-tuning; do

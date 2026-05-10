@@ -90,14 +90,20 @@ jobs:
         # tag.  Enforce that here so binary VERSION reflects a real upstream
         # release; pass `allow_non_release_base=true` to bypass during
         # one-off experiments.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           BASE="${{ steps.merge_base.outputs.base }}"
-          # `git tag -l ... | head -1` triggers SIGPIPE under `set -o pipefail`
-          # when git tries to write past head's first-line read (exit 141).
-          # `git for-each-ref --count=1` does the same job without a pipe.
-          LATEST_RELEASE=$(git for-each-ref --count=1 --sort='-v:refname' --format='%(refname:short)' 'refs/tags/v[0-9]*')
-          echo "Latest upstream release tag in repo: $LATEST_RELEASE"
+          # Query upstream's GH releases directly: a local-tag-based query
+          # (`git for-each-ref 'refs/tags/v[0-9]*'`) sees this fork's own
+          # release tags too — `v1.14.45-csillag.X` lexically out-sorts
+          # upstream `v1.14.45` under git's `v:refname` semver-aware sort
+          # (semver pre-release tag ordering inverts what git assumes), so
+          # the "latest upstream release" check would falsely flag every
+          # already-built combined release as a newer upstream.
+          LATEST_RELEASE=$(gh release view --repo anomalyco/opencode --json tagName -q .tagName)
+          echo "Latest upstream release tag (via gh): $LATEST_RELEASE"
 
           if EXACT=$(git describe --tags --exact-match --match 'v[0-9]*' "$BASE" 2>/dev/null); then
             VERSION="${EXACT#v}"
