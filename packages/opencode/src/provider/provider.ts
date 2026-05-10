@@ -1250,7 +1250,16 @@ const layer: Layer.Layer<
                   write: model?.cost?.cache_write ?? existingModel?.cost?.cache.write ?? 0,
                 },
               },
-              options: mergeDeep(existingModel?.options ?? {}, model.options ?? {}),
+              // Merge provider-level cacheTTL (and similar provider-scoped cache knobs)
+              // as a fallback so user-configured `provider.<id>.options.cacheTTL` reaches
+              // every model under that provider; per-model `model.options.cacheTTL` still wins.
+              options: mergeDeep(
+                mergeDeep(
+                  existingModel?.options ?? {},
+                  provider.options?.cacheTTL ? { cacheTTL: provider.options.cacheTTL } : {},
+                ),
+                model.options ?? {},
+              ),
               limit: {
                 context: model.limit?.context ?? existingModel?.limit?.context ?? 0,
                 input: model.limit?.input ?? existingModel?.limit?.input,

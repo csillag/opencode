@@ -88,6 +88,10 @@ export const Info = Schema.Struct({
         setCacheKey: Schema.optional(Schema.Boolean).annotate({
           description: "Enable promptCacheKey for this provider (default false)",
         }),
+        cacheTTL: Schema.optional(Schema.Literals(["5m", "1h"])).annotate({
+          description:
+            "Anthropic-family prompt-cache TTL. '5m' (default) costs 1.25× input price on write; '1h' costs 2× on write but keeps the cache alive across longer idle gaps. Applied to anthropic/openrouter/openai-compatible/alibaba ephemeral cache_control. Has no effect on bedrock (cachePoint has no ttl). Provider-level default; per-model `options.cacheTTL` overrides.",
+        }),
         timeout: Schema.optional(
           Schema.Union([PositiveInt, Schema.Literal(false)]).annotate({
             description:
