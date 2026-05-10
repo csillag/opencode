@@ -127,20 +127,19 @@ jobs:
           OPENCODE_VERSION: ${{ needs.prep.outputs.tag }}
 
       - name: Package archives
-        # Discover every target dist subdir produced by build.ts; tar+gzip Linux
-        # builds, zip Darwin/Windows builds.  Globbing avoids hard-coding the
-        # 12-target list — when build.ts adds or drops a target, this just works.
+        # Uniform .zip across all OSes for a single consumer-script extraction
+        # path.  Info-ZIP encodes Unix file modes in the archive's extra
+        # fields, so `unzip` on Linux/macOS restores the +x bit on bin/opencode
+        # without a follow-up `chmod`.  Globbing the dist tree avoids
+        # hard-coding the 12-target list — when build.ts adds or drops a
+        # target, this step picks it up.
         run: |
           set -euo pipefail
           mkdir -p /tmp/dist
           shopt -s nullglob
           for dir in packages/opencode/dist/opencode-*/; do
             arch=$(basename "$dir" | sed 's/^opencode-//')
-            case "$arch" in
-              linux-*)            tar czf "/tmp/dist/opencode-$arch.tar.gz" -C "$dir" . ;;
-              darwin-*|windows-*) (cd "$dir" && zip -qr "/tmp/dist/opencode-$arch.zip" .) ;;
-              *) echo "::warning::unknown arch '$arch' in $dir, skipping" ;;
-            esac
+            (cd "$dir" && zip -qr "/tmp/dist/opencode-$arch.zip" .)
           done
           echo "--- packaged ---"
           ls -lh /tmp/dist
@@ -179,7 +178,9 @@ jobs:
               (`${{ inputs.cache_ref }}`)
             - **shared base** @ `${{ needs.prep.outputs.base }}`
 
-            All 12 build targets included: linux-{arm64,x64,x64-baseline,arm64-musl,x64-musl,x64-baseline-musl}, darwin-{arm64,x64,x64-baseline}, windows-{arm64,x64,x64-baseline}.
+            All 12 build targets included as `.zip`: linux-{arm64,x64,x64-baseline,arm64-musl,x64-musl,x64-baseline-musl}, darwin-{arm64,x64,x64-baseline}, windows-{arm64,x64,x64-baseline}.
+
+            Extraction restores the `bin/opencode` executable bit on POSIX (Info-ZIP encodes Unix modes; `unzip` honors them).
 
             Built by `.github/workflows/build-combined.yml` on `csillag/opencode@main`.
           files: /tmp/dl/*
