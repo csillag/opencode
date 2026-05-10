@@ -53,11 +53,14 @@ jobs:
           set -euo pipefail
           git fetch origin "${{ inputs.iframe_ref }}":refs/remotes/origin/iframe
           git fetch origin "${{ inputs.cache_ref }}":refs/remotes/origin/cache
-          # Upstream release tags drive the binary's version string.  We only
-          # need semver-shaped tags (`v<major>.<minor>.<patch>`); skip the
-          # `vscode-v*` extension tags by matching the pattern explicitly.
+          # Upstream release tags drive the binary's version string.  Git
+          # refspec wildcards only support `*` as a full path component
+          # (`refs/tags/v[0-9]*` returns "fatal: invalid refspec"), so fetch
+          # ALL upstream tags — `vscode-v0.0.X` extension tags come along too.
+          # Later `git tag -l 'v[0-9]*'` (a shell-glob, not a refspec) filters
+          # to the semver-shaped tags we actually care about.
           git remote add upstream https://github.com/anomalyco/opencode.git 2>/dev/null || true
-          git fetch upstream "+refs/tags/v[0-9]*:refs/tags/v[0-9]*" 2>&1 | tail -3
+          git fetch upstream 'refs/tags/*:refs/tags/*' 2>&1 | tail -5
 
       - name: Compute merge-base + verify both branches share it
         id: merge_base
