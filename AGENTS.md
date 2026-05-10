@@ -74,8 +74,18 @@ Note any uncommitted changes — do **not** stash without telling the user.
 ## Step 1 — Discover the latest upstream release tag
 
 ```sh
+# Interactive shell: piping through head is fine.
 LATEST=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -1)
 echo "Latest upstream release: $LATEST"
+```
+
+In strict-mode scripts (`set -euo pipefail`), the pipe-to-head pattern can
+exit 141 when `head` closes the pipe before `git tag` has finished writing.
+Use the no-pipe form instead:
+
+```sh
+LATEST=$(git for-each-ref --count=1 --sort='-v:refname' \
+           --format='%(refname:short)' 'refs/tags/v[0-9]*')
 ```
 
 Cross-check against the GitHub Releases API to make sure your local tags are
@@ -98,11 +108,29 @@ those by mistake.
 
 Do them one at a time.  Confirm with the user before force-pushing.
 
+> **Use the `--onto NEW_BASE HEAD~N` form, not the bare `git rebase NEW_BASE`.**
+> Both feature branches are exactly **1 commit** ahead of their previous base
+> (the `feat: ...` commit at HEAD).  The naive `git rebase v1.14.45` works
+> only when the previous base is a *strict ancestor* of the new tag — which
+> happens to hold today, but breaks the moment a branch was rebased onto
+> `dev`'s tip and a release tag was then made on an *earlier* dev commit.
+> In that scenario the naive form would silently absorb every dev commit
+> between the new tag and the old base into the feature branch.
+>
+> The `--onto NEW_BASE HEAD~1` form replays exactly the top commit and
+> nothing else — safe regardless of the relative position of new and old
+> bases.  For branches with N feature commits, use `HEAD~N`.
+
+After every rebase, **verify count is unchanged** with
+`git rev-list --count "$LATEST..HEAD"` — should equal the number of feature
+commits the branch carried before the rebase.
+
 ### iframe-embeddable
 
 ```sh
 git checkout csillag/make-web-embeddable-in-iframes
-git rebase "$LATEST"
+git rebase --onto "$LATEST" HEAD~1
+git rev-list --count "$LATEST..HEAD"   # must print 1
 ```
 
 If conflicts: resolve by hand.  The branch typically only touches three files
@@ -127,7 +155,8 @@ Verify build sanity (TypeScript only — this branch has no test additions):
 
 ```sh
 git checkout csillag/anthropic-prompt-cache-tuning
-git rebase "$LATEST"
+git rebase --onto "$LATEST" HEAD~1
+git rev-list --count "$LATEST..HEAD"   # must print 1
 ```
 
 This branch touches:
@@ -279,29 +308,46 @@ OPENCODE_VERSION="${LATEST#v}-csillag" \
   workflow and this file.  The combine step assumes exactly two branches.
 - **Do not retag a release.**  Each build gets a unique tag via the SHA suffix.
   If you really need to overwrite, delete the release on GitHub first.
+- **Do not use the bare `git rebase NEW_BASE` form.**  Always
+  `git rebase --onto NEW_BASE HEAD~N` (N = number of feature commits on the
+  branch).  See the rationale block in Step 2.
 
 ---
 
 ## Quick-reference invocation
 
-For an autonomous run with no questions to ask:
+For an autonomous run with no questions to ask.  Both branches today carry
+exactly **1** feature commit, so the per-branch `HEAD~1` is hard-coded; if a
+branch ever grows more commits, update the loop.
 
 ```sh
 set -euo pipefail
 cd ~/deai/opencode
 git fetch upstream --tags --prune
 git fetch origin
-LATEST=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -1)
+
+# Avoid `git tag -l ... | head -1` here — under `set -o pipefail` the
+# closed-pipe SIGPIPE from `head` propagates as exit 141.
+LATEST=$(git for-each-ref --count=1 --sort='-v:refname' \
+           --format='%(refname:short)' 'refs/tags/v[0-9]*')
 echo "Rebasing both feature branches onto $LATEST"
 
 for BR in csillag/make-web-embeddable-in-iframes csillag/anthropic-prompt-cache-tuning; do
   git checkout "$BR"
-  git rebase "$LATEST"   # FIXME: stops here on conflict; agent must resolve before re-running
+  # --onto NEW_BASE HEAD~N replays exactly the top N commits and nothing else,
+  # immune to the relative position of NEW_BASE vs the previous base.  If you
+  # use the bare `git rebase $LATEST` form here and a release tag is older than
+  # the branch's current base, you will silently absorb the dev-only delta
+  # between $LATEST and the old base into the feature branch.
+  git rebase --onto "$LATEST" HEAD~1   # FIXME: stops here on conflict
+  test "$(git rev-list --count "$LATEST..HEAD")" = 1 \
+    || { echo "post-rebase: $BR has more than 1 commit ahead of $LATEST"; exit 1; }
   git push --force-with-lease origin "$BR" --no-verify
 done
 
-# sanity
-BASE=$(git merge-base origin/csillag/make-web-embeddable-in-iframes origin/csillag/anthropic-prompt-cache-tuning)
+# sanity: shared base must equal the release tag
+BASE=$(git merge-base origin/csillag/make-web-embeddable-in-iframes \
+                      origin/csillag/anthropic-prompt-cache-tuning)
 git describe --tags --exact-match --match 'v[0-9]*' "$BASE"
 
 # build
