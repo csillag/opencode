@@ -93,7 +93,10 @@ jobs:
         run: |
           set -euo pipefail
           BASE="${{ steps.merge_base.outputs.base }}"
-          LATEST_RELEASE=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -1)
+          # `git tag -l ... | head -1` triggers SIGPIPE under `set -o pipefail`
+          # when git tries to write past head's first-line read (exit 141).
+          # `git for-each-ref --count=1` does the same job without a pipe.
+          LATEST_RELEASE=$(git for-each-ref --count=1 --sort='-v:refname' --format='%(refname:short)' 'refs/tags/v[0-9]*')
           echo "Latest upstream release tag in repo: $LATEST_RELEASE"
 
           if EXACT=$(git describe --tags --exact-match --match 'v[0-9]*' "$BASE" 2>/dev/null); then
