@@ -38,6 +38,25 @@ curl -fsSL https://raw.githubusercontent.com/csillag/opencode/main/install.sh \
 The script is a small fork of upstream's `opencode.ai/install` — see the
 header of `install.sh` for the diff rationale.
 
+### Idempotent / repeated invocation
+
+For cron, system-startup scripts, or shell rc files: use `smart-install.sh`
+instead.  It checks `opencode --version` against the latest released binary
+version *before* doing any download or detection work, and exits 0 silently
+when already up-to-date.  Defers to `install.sh` (passing through any args)
+only when an upgrade or fresh install is actually needed.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/csillag/opencode/main/smart-install.sh | bash
+```
+
+For non-interactive contexts (don't touch shell rc):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/csillag/opencode/main/smart-install.sh \
+  | bash -s -- --no-modify-path
+```
+
 ## Maintenance procedure
 
 The full rebase + build runbook is in [`AGENTS.md`](./AGENTS.md).  TL;DR:
