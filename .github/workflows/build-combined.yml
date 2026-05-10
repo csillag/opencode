@@ -24,6 +24,10 @@ on:
         description: "Publish a GitHub release with the binaries (false = artifacts only, 90d retention)"
         required: false
         default: "true"
+      allow_non_release_base:
+        description: "Allow building when the shared base of both feature branches is not exactly an upstream release tag.  Default 'false' enforces the rebase-onto-latest-release process documented in AGENTS.md."
+        required: false
+        default: "false"
 
 permissions:
   contents: write
@@ -35,16 +39,25 @@ jobs:
       base: ${{ steps.merge_base.outputs.base }}
       iframe_sha: ${{ steps.shas.outputs.iframe_sha }}
       cache_sha: ${{ steps.shas.outputs.cache_sha }}
-      tag: ${{ steps.shas.outputs.tag }}
+      upstream_version: ${{ steps.upstream.outputs.upstream_version }}
+      upstream_tag: ${{ steps.upstream.outputs.upstream_tag }}
+      binary_version: ${{ steps.upstream.outputs.binary_version }}
+      release_tag: ${{ steps.shas.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Fetch feature branches
+      - name: Fetch feature branches + upstream release tags
         run: |
+          set -euo pipefail
           git fetch origin "${{ inputs.iframe_ref }}":refs/remotes/origin/iframe
           git fetch origin "${{ inputs.cache_ref }}":refs/remotes/origin/cache
+          # Upstream release tags drive the binary's version string.  We only
+          # need semver-shaped tags (`v<major>.<minor>.<patch>`); skip the
+          # `vscode-v*` extension tags by matching the pattern explicitly.
+          git remote add upstream https://github.com/anomalyco/opencode.git 2>/dev/null || true
+          git fetch upstream "+refs/tags/v[0-9]*:refs/tags/v[0-9]*" 2>&1 | tail -3
 
       - name: Compute merge-base + verify both branches share it
         id: merge_base
@@ -67,14 +80,61 @@ jobs:
             echo "::warning::One feature branch has many commits ahead of base ($IFRAME_AHEAD / $CACHE_AHEAD).  Verify both are rebased onto the same upstream tip."
           fi
 
-      - name: Resolve short SHAs + build tag
+      - name: Verify base is an upstream release tag + derive version
+        id: upstream
+        # The build process documented in AGENTS.md rebases both feature
+        # branches onto the latest upstream `v<major>.<minor>.<patch>` release
+        # tag.  Enforce that here so binary VERSION reflects a real upstream
+        # release; pass `allow_non_release_base=true` to bypass during
+        # one-off experiments.
+        run: |
+          set -euo pipefail
+          BASE="${{ steps.merge_base.outputs.base }}"
+          LATEST_RELEASE=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -1)
+          echo "Latest upstream release tag in repo: $LATEST_RELEASE"
+
+          if EXACT=$(git describe --tags --exact-match --match 'v[0-9]*' "$BASE" 2>/dev/null); then
+            VERSION="${EXACT#v}"
+            echo "✓ Base $BASE is exactly upstream release $EXACT (version $VERSION)"
+            if [ "$EXACT" != "$LATEST_RELEASE" ]; then
+              echo "::warning::Base is at $EXACT but latest upstream release is $LATEST_RELEASE.  Consider rebasing both feature branches onto $LATEST_RELEASE — see AGENTS.md."
+            fi
+            echo "upstream_version=$VERSION"        >> "$GITHUB_OUTPUT"
+            echo "upstream_tag=$EXACT"              >> "$GITHUB_OUTPUT"
+            echo "binary_version=${VERSION}-csillag" >> "$GITHUB_OUTPUT"
+          else
+            NEAREST=$(git describe --tags --match 'v[0-9]*' "$BASE" 2>/dev/null || echo "(none)")
+            if [ "${{ inputs.allow_non_release_base }}" != "true" ]; then
+              echo "::error::Shared base $BASE is NOT an upstream release tag (nearest: $NEAREST)."
+              echo "::error::The build process requires both feature branches to be rebased onto a release tag (latest is $LATEST_RELEASE)."
+              echo "::error::See AGENTS.md → 'Rebase procedure'.  To bypass for a one-off, re-dispatch with allow_non_release_base=true."
+              exit 1
+            fi
+            VERSION="${NEAREST#v}-dirty"
+            echo "::warning::Base is not at a release tag.  Falling back to OPENCODE_VERSION=$VERSION-csillag (allow_non_release_base override active)."
+            echo "upstream_version=$VERSION"        >> "$GITHUB_OUTPUT"
+            echo "upstream_tag="                    >> "$GITHUB_OUTPUT"
+            echo "binary_version=${VERSION}-csillag" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve short SHAs + GH release tag
         id: shas
         run: |
+          set -euo pipefail
           IFRAME_SHA=$(git rev-parse --short origin/iframe)
           CACHE_SHA=$(git rev-parse --short origin/cache)
+          BIN_VERSION="${{ steps.upstream.outputs.binary_version }}"
+          # GH release tag stays unique per (upstream-version, branch-SHAs) so
+          # repeated builds against the same upstream release with new feature
+          # branch tips don't collide.  Binary --version is just `${ver}-csillag`.
+          RELEASE_TAG="v${BIN_VERSION}.${IFRAME_SHA}.${CACHE_SHA}"
           echo "iframe_sha=$IFRAME_SHA" >> "$GITHUB_OUTPUT"
-          echo "cache_sha=$CACHE_SHA" >> "$GITHUB_OUTPUT"
-          echo "tag=combined-${IFRAME_SHA}-${CACHE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "cache_sha=$CACHE_SHA"   >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          # Also re-emit binary_version through the prep job's outputs for
+          # downstream visibility.
+          echo "Release tag: $RELEASE_TAG"
+          echo "Binary OPENCODE_VERSION: $BIN_VERSION"
 
   build:
     needs: prep
@@ -124,7 +184,11 @@ jobs:
           cd packages/opencode
           bun run script/build.ts
         env:
-          OPENCODE_VERSION: ${{ needs.prep.outputs.tag }}
+          # `<upstream-release>-csillag` (e.g. `1.14.45-csillag`).  Resolved by
+          # the `upstream` step in the prep job from the latest release tag the
+          # shared base sits on.  Becomes the binary's `--version` output via
+          # packages/opencode/script/build.ts → Script.version.
+          OPENCODE_VERSION: ${{ needs.prep.outputs.binary_version }}
 
       - name: Package archives
         # Uniform .zip across all OSes for a single consumer-script extraction
@@ -167,21 +231,21 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.prep.outputs.tag }}
-          name: ${{ needs.prep.outputs.tag }}
+          tag_name: ${{ needs.prep.outputs.release_tag }}
+          name: ${{ needs.prep.outputs.release_tag }}
           body: |
-            Combined build of two feature branches on top of upstream tip.
+            Combined build of two feature branches rebased onto an upstream release.
 
+            - **upstream release** @ `${{ needs.prep.outputs.upstream_tag }}` → `opencode --version` reports `${{ needs.prep.outputs.binary_version }}`
             - **iframe-embeddable** @ `${{ needs.prep.outputs.iframe_sha }}`
               (`${{ inputs.iframe_ref }}`)
             - **anthropic-prompt-cache-tuning** @ `${{ needs.prep.outputs.cache_sha }}`
               (`${{ inputs.cache_ref }}`)
-            - **shared base** @ `${{ needs.prep.outputs.base }}`
 
             All 12 build targets included as `.zip`: linux-{arm64,x64,x64-baseline,arm64-musl,x64-musl,x64-baseline-musl}, darwin-{arm64,x64,x64-baseline}, windows-{arm64,x64,x64-baseline}.
 
             Extraction restores the `bin/opencode` executable bit on POSIX (Info-ZIP encodes Unix modes; `unzip` honors them).
 
-            Built by `.github/workflows/build-combined.yml` on `csillag/opencode@main`.
+            Built by `.github/workflows/build-combined.yml` on `csillag/opencode@main`.  Rebase procedure: see `AGENTS.md`.
           files: /tmp/dl/*
           fail_on_unmatched_files: true

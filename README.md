@@ -8,11 +8,28 @@ binaries from two long-lived feature branches on this fork:
 | `csillag/make-web-embeddable-in-iframes`     | Vite `base: './'`, CSP `'unsafe-eval'` for Zod 4, `getCurrentUrl` localStorage override — lets the SPA mount inside an iframe at any URL subpath. |
 | `csillag/anthropic-prompt-cache-tuning`      | Anthropic 1h prompt-cache TTL (configurable via `opencode.json` `provider.anthropic.options.cacheTTL`), tool-order stabilization for cache prefix determinism, TTL-aware cost split. |
 
-Both branches are rebased manually onto upstream `dev` (anomalyco/opencode).
-Their merge-base is treated as the shared upstream tip; the combine workflow
-fast-forwards both branches onto a fresh checkout, builds binaries for four
-targets (linux-arm64, linux-x64, darwin-arm64, darwin-x64), and publishes a
-GitHub release.
+Both branches are rebased manually onto the **latest upstream release tag**
+(`v<major>.<minor>.<patch>`, e.g. `v1.14.45`), not the `dev` tip.  Their
+merge-base is treated as the shared upstream version; the combine workflow
+verifies the base is exactly an upstream release tag, then fast-forwards both
+branches onto a fresh checkout, builds 12 binaries (linux ×6 / darwin ×3 /
+windows ×3), and publishes a GitHub release.
+
+The binary's `opencode --version` reports `<upstream-version>-csillag` (e.g.
+`1.14.45-csillag`), matching the upstream release this build descends from.
+
+## Maintenance procedure
+
+The full rebase + build runbook is in [`AGENTS.md`](./AGENTS.md).  TL;DR:
+
+1. Rebase both feature branches onto the **latest upstream release tag**
+   (`v[0-9]*`), not the `dev` tip.  Releases are frequent — try to keep the
+   base less than a few days old.
+2. Force-push both branches to `origin` with `--force-with-lease`.
+3. Trigger the combined build via `gh workflow run`.
+
+The workflow refuses to build unless both branches share the same upstream
+release tag as their merge-base.
 
 ## How to build
 
@@ -31,18 +48,13 @@ gh workflow run build-combined.yml \
   --field cache_ref=<sha>
 ```
 
-Built binaries land in a release tagged `combined-<iframe-sha>-<cache-sha>`.
+Built binaries land in a release tagged
+`v<upstream-version>-csillag.<iframe-sha>.<cache-sha>` (e.g.
+`v1.14.45-csillag.92bc6a51.707bea8a`).  The SHA suffix is for traceability;
+the binary's `--version` strips it to `<upstream-version>-csillag`.
 
-## Maintenance
-
-When upstream `dev` advances:
-
-1. Rebase `csillag/make-web-embeddable-in-iframes` onto the new tip; resolve
-   conflicts; force-push with `--force-with-lease`.
-2. Rebase `csillag/anthropic-prompt-cache-tuning` onto the **same** tip;
-   resolve; force-push with `--force-with-lease`.
-3. Run the workflow above. The merge-base check warns loudly if the two
-   branches are not on the same upstream tip.
+For the full rebase + verification + build runbook (including conflict
+resolution per branch and the local-build recipe), see [`AGENTS.md`](./AGENTS.md).
 
 ## Why no automatic CI on push
 
