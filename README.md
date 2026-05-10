@@ -18,6 +18,26 @@ windows ×3), and publishes a GitHub release.
 The binary's `opencode --version` reports `<upstream-version>-csillag` (e.g.
 `1.14.45-csillag`), matching the upstream release this build descends from.
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/csillag/opencode/main/install.sh | bash
+```
+
+Auto-detects OS / arch / glibc-vs-musl / AVX2 (baseline) and downloads the
+matching release asset.  Installs to `~/.opencode/bin/opencode` and adds the
+directory to `$PATH` in your shell rc (override with `--no-modify-path`).
+
+To pin a specific build:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/csillag/opencode/main/install.sh \
+  | bash -s -- --version v1.14.45-csillag.d103e2889.cccfb448e
+```
+
+The script is a small fork of upstream's `opencode.ai/install` — see the
+header of `install.sh` for the diff rationale.
+
 ## Maintenance procedure
 
 The full rebase + build runbook is in [`AGENTS.md`](./AGENTS.md).  TL;DR:
