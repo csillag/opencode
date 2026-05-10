@@ -5,7 +5,7 @@ name: Build combined opencode (iframe + cache-tuning)
 # fire whether or not anything actually changed.  After rebasing and pushing
 # either branch, run:
 #
-#   gh workflow run build-combined.yml --repo csillag/opencode --ref main
+#   gh workflow run build-combined.yml --repo csillag/opencode
 #
 # (Optionally pass `--field iframe_ref=...` / `--field cache_ref=...` to pin
 # specific commits instead of the branch tips.)
@@ -13,11 +13,11 @@ on:
   workflow_dispatch:
     inputs:
       iframe_ref:
-        description: "Ref for iframe-embeddable branch (default: csillag/make-web-embeddable-in-iframes)"
+        description: "Ref for iframe-embeddable branch"
         required: false
         default: csillag/make-web-embeddable-in-iframes
       cache_ref:
-        description: "Ref for prompt-cache-tuning branch (default: csillag/anthropic-prompt-cache-tuning)"
+        description: "Ref for prompt-cache-tuning branch"
         required: false
         default: csillag/anthropic-prompt-cache-tuning
       release:
@@ -40,8 +40,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # Fetch both feature branches in addition to the workflow's own ref.
-          # `git fetch` below brings them in.
 
       - name: Fetch feature branches
         run: |
@@ -80,15 +78,13 @@ jobs:
 
   build:
     needs: prep
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-latest
-            archs: linux-arm64 linux-x64
-          - runner: macos-latest
-            archs: darwin-arm64 darwin-x64
-    runs-on: ${{ matrix.runner }}
+    # Single ubuntu runner builds all 12 targets via Bun cross-compilation
+    # (linux glibc + linux musl + darwin + windows, with baseline variants).
+    # No macOS runner needed: macOS binaries here are unsigned regardless of
+    # host OS, so the only benefit of a macos-latest runner would be code
+    # signing — not in scope yet.  packages/opencode/script/build.ts emits the
+    # full target set when `--single` is not passed.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -107,10 +103,9 @@ jobs:
           git checkout -B combined "${{ needs.prep.outputs.base }}"
 
           # Both feature branches sit on the shared base, so each merge is a
-          # fast-forward when the branches don't touch overlapping files.  Use
-          # --no-ff explicitly to keep both commit ancestries visible in the
-          # build's git log; the resulting tree is identical to what the
-          # operator would see locally with `git merge feat/X feat/Y`.
+          # fast-forward when the branches don't touch overlapping files.
+          # `--no-ff` keeps both commit ancestries visible in the build's git log;
+          # the resulting tree is identical to a local `git merge feat/X feat/Y`.
           git merge --no-ff --no-edit origin/iframe
           git merge --no-ff --no-edit origin/cache
 
@@ -124,31 +119,36 @@ jobs:
       - name: Install deps
         run: bun install --frozen-lockfile
 
-      - name: Build CLI
+      - name: Build CLI (all 12 targets)
         run: |
           cd packages/opencode
-          bun run script/build.ts --all
+          bun run script/build.ts
         env:
           OPENCODE_VERSION: ${{ needs.prep.outputs.tag }}
 
       - name: Package archives
+        # Discover every target dist subdir produced by build.ts; tar+gzip Linux
+        # builds, zip Darwin/Windows builds.  Globbing avoids hard-coding the
+        # 12-target list — when build.ts adds or drops a target, this just works.
         run: |
           set -euo pipefail
           mkdir -p /tmp/dist
-          for arch in ${{ matrix.archs }}; do
-            cd packages/opencode/dist/opencode-$arch
+          shopt -s nullglob
+          for dir in packages/opencode/dist/opencode-*/; do
+            arch=$(basename "$dir" | sed 's/^opencode-//')
             case "$arch" in
-              linux-*) tar czf "/tmp/dist/opencode-$arch.tar.gz" . ;;
-              darwin-*) zip -r "/tmp/dist/opencode-$arch.zip" . ;;
+              linux-*)            tar czf "/tmp/dist/opencode-$arch.tar.gz" -C "$dir" . ;;
+              darwin-*|windows-*) (cd "$dir" && zip -qr "/tmp/dist/opencode-$arch.zip" .) ;;
+              *) echo "::warning::unknown arch '$arch' in $dir, skipping" ;;
             esac
-            cd - >/dev/null
           done
+          echo "--- packaged ---"
           ls -lh /tmp/dist
 
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: opencode-${{ matrix.runner }}
+          name: opencode-binaries
           path: /tmp/dist/*
           retention-days: 90
 
@@ -159,8 +159,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          name: opencode-binaries
           path: /tmp/dl
-          merge-multiple: true
 
       - name: List downloaded
         run: ls -lh /tmp/dl
@@ -178,6 +178,8 @@ jobs:
             - **anthropic-prompt-cache-tuning** @ `${{ needs.prep.outputs.cache_sha }}`
               (`${{ inputs.cache_ref }}`)
             - **shared base** @ `${{ needs.prep.outputs.base }}`
+
+            All 12 build targets included: linux-{arm64,x64,x64-baseline,arm64-musl,x64-musl,x64-baseline-musl}, darwin-{arm64,x64,x64-baseline}, windows-{arm64,x64,x64-baseline}.
 
             Built by `.github/workflows/build-combined.yml` on `csillag/opencode@main`.
           files: /tmp/dl/*
