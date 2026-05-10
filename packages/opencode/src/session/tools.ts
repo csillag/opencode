@@ -89,12 +89,21 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         .pipe(Effect.orDie),
   })
 
-  for (const item of yield* registry.tools({
-    modelID: ModelV2.ID.make(input.model.api.id),
-    providerID: input.model.providerID,
-    agent: input.agent,
-    permission: input.session.permission,
-  })) {
+  // Sort registry tools by id for deterministic prompt-prefix bytes. Tools render
+  // at position 0 of the cache prefix; any reordering invalidates everything
+  // downstream (system + messages). Registry insertion order can vary by plugin
+  // load timing, so sort defensively.
+  const registryToolList = (
+    yield* registry.tools({
+      modelID: ModelV2.ID.make(input.model.api.id),
+      providerID: input.model.providerID,
+      agent: input.agent,
+      permission: input.session.permission,
+    })
+  )
+    .slice()
+    .sort((a, b) => a.id.localeCompare(b.id))
+  for (const item of registryToolList) {
     const schema = ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item))
     tools[item.id] = tool({
       description: item.description,
@@ -387,7 +396,11 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
 
   if (flags.experimentalCodeMode) return tools
 
-  for (const [key, entry] of Object.entries(yield* mcp.tools())) {
+  // Sort MCP tools by key — same prompt-prefix-stability rationale as registry tools above.
+  // MCP server discovery is async and racy across restarts; insertion order in the returned
+  // record is not reliably stable. Issue anomalyco/opencode#23571 documents the cache miss.
+  const mcpToolEntries = Object.entries(yield* mcp.tools()).sort(([a], [b]) => a.localeCompare(b))
+  for (const [key, entry] of mcpToolEntries) {
     const item = McpCatalog.convertTool(entry.def, entry.client, entry.timeout)
     const execute = item.execute
     if (!execute) continue
