@@ -45,8 +45,13 @@ if [ -z "$LATEST_TAG" ]; then
 fi
 
 # 2. Derive what `opencode --version` would report for that tag.
-#    Tag format: `v<upstream>-csillag.<iframe-sha>.<cache-sha>`
-#    Binary form: `<upstream>-csillag` (no leading v, no trailing SHAs)
+#    Tag format:  `v<upstream>-csillag.<N>.<iframe-sha>.<cache-sha>`
+#    Binary form: `<upstream>-csillag.<N>` (no leading v, no trailing SHAs)
+#    N is a per-upstream-version build counter (set by build-combined.yml), so
+#    rebuilds against the same upstream release are distinguishable here.
+#    Legacy pre-counter tags (`v<upstream>-csillag.<sha>.<sha>`) reduce to
+#    `<upstream>-csillag` under the same sed, matching their binaries' output.
+#    The `-csillag` segment is not hex, so the strip can never eat the version.
 LATEST_BINARY_VERSION=$(echo "$LATEST_TAG" \
   | sed -E 's/^v//; s/\.[0-9a-f]+\.[0-9a-f]+$//')
 

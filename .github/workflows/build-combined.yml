@@ -41,7 +41,7 @@ jobs:
       cache_sha: ${{ steps.shas.outputs.cache_sha }}
       upstream_version: ${{ steps.upstream.outputs.upstream_version }}
       upstream_tag: ${{ steps.upstream.outputs.upstream_tag }}
-      binary_version: ${{ steps.upstream.outputs.binary_version }}
+      binary_version: ${{ steps.shas.outputs.binary_version }}
       release_tag: ${{ steps.shas.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v6
@@ -129,22 +129,48 @@ jobs:
             echo "binary_version=${VERSION}-csillag" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Resolve short SHAs + GH release tag
+      - name: Resolve short SHAs + build counter + GH release tag
         id: shas
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           IFRAME_SHA=$(git rev-parse --short origin/iframe)
           CACHE_SHA=$(git rev-parse --short origin/cache)
-          BIN_VERSION="${{ steps.upstream.outputs.binary_version }}"
-          # GH release tag stays unique per (upstream-version, branch-SHAs) so
-          # repeated builds against the same upstream release with new feature
-          # branch tips don't collide.  Binary --version is just `${ver}-csillag`.
+          BASE_VERSION="${{ steps.upstream.outputs.binary_version }}"
+
+          # Per-upstream-version build counter so the binary's --version is
+          # unique per build (`1.17.3-csillag.2`) and smart-install.sh can
+          # detect that a newer build of the SAME upstream release is out.
+          # N = max counter among existing releases for this upstream version,
+          # plus one.  max+1 (not count+1) so deleting an old release can never
+          # cause tag reuse.  Tag formats seen:
+          #   v<ver>-csillag.<sha>.<sha>       (legacy, pre-counter)  -> counts as 1
+          #   v<ver>-csillag.<N>.<sha>.<sha>   (current)              -> counts as N
+          # Distinguished by field count after `csillag.` — a short SHA can be
+          # all-digits, so "is it numeric" alone would misparse legacy tags.
+          MAX=0
+          while IFS= read -r tag; do
+            rest="${tag#v${BASE_VERSION}.}"
+            [ "$rest" = "$tag" ] && continue
+            nfields=$(echo "$rest" | awk -F. '{print NF}')
+            if [ "$nfields" -ge 3 ]; then n="${rest%%.*}"; else n=1; fi
+            case "$n" in (*[!0-9]*|'') n=1 ;; esac
+            [ "$n" -gt "$MAX" ] && MAX=$n
+          done < <(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName -q '.[].tagName')
+          N=$((MAX + 1))
+
+          BIN_VERSION="${BASE_VERSION}.${N}"
+          # GH release tag keeps the branch SHAs after the counter for
+          # traceability back to the exact feature-branch tips.
+          # smart-install.sh derives the binary version from this tag by
+          # stripping the two trailing hex groups — keep the formats in sync.
           RELEASE_TAG="v${BIN_VERSION}.${IFRAME_SHA}.${CACHE_SHA}"
           echo "iframe_sha=$IFRAME_SHA" >> "$GITHUB_OUTPUT"
           echo "cache_sha=$CACHE_SHA"   >> "$GITHUB_OUTPUT"
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
-          # Also re-emit binary_version through the prep job's outputs for
-          # downstream visibility.
+          echo "binary_version=$BIN_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Build counter for ${BASE_VERSION}: $N (max existing: $MAX)"
           echo "Release tag: $RELEASE_TAG"
           echo "Binary OPENCODE_VERSION: $BIN_VERSION"
 

@@ -265,11 +265,19 @@ gh run watch "$RUN" --repo csillag/opencode --interval 30
 A clean build is ~3 minutes.  On success the release lands at:
 
 ```
-https://github.com/csillag/opencode/releases/tag/v<UPSTREAM>-csillag.<IFRAME-SHA>.<CACHE-SHA>
+https://github.com/csillag/opencode/releases/tag/v<UPSTREAM>-csillag.<N>.<IFRAME-SHA>.<CACHE-SHA>
 ```
 
-The binary's `opencode --version` reports `<UPSTREAM>-csillag` (no SHAs) — the
-SHAs only appear in the GitHub release tag for traceability.
+`<N>` is a per-upstream-version build counter the prep job computes as
+max(existing counters for this upstream version) + 1 — it makes repeated
+builds against the same upstream release distinguishable both in the tag and
+in the binary.  The binary's `opencode --version` reports
+`<UPSTREAM>-csillag.<N>` (no SHAs) — the SHAs only appear in the GitHub
+release tag for traceability, and `smart-install.sh` relies on stripping
+exactly the two trailing hex groups to recover the binary version from the
+tag.  Releases tagged before the counter existed
+(`v<UPSTREAM>-csillag.<sha>.<sha>`) count as build 1 of their upstream
+version.
 
 ---
 
@@ -311,6 +319,11 @@ Setting `OPENCODE_VERSION` to `<release>-csillag` makes the script bypass its
 default branch-name + timestamp formatting (see
 `packages/script/src/index.ts`) and use that string verbatim as
 `Script.version`, which becomes `opencode --version`.
+
+(CI additionally appends a `.<N>` build counter to the version — see Step 5.
+For local hand-test builds the bare `<release>-csillag` form is fine and has
+the side benefit that `smart-install.sh` will treat the machine as outdated
+and reinstall a real release on its next run.)
 
 To build only your current platform's binary instead of all 12:
 
