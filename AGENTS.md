@@ -9,6 +9,12 @@ If you are a new agent landing in this repo: **read this file end-to-end before
 making any change**.  Skip Step 0 only if you have already read the file in this
 conversation.
 
+This runbook lives **only on this fork's `main` branch**.  The two feature
+branches carry upstream's generic contributor `AGENTS.md` instead, so if the
+working tree has a feature branch checked out (the usual state), read this
+file via `git show origin/main:AGENTS.md` — grepping the checked-out copy
+will silently find the wrong file.
+
 ---
 
 ## What lives here
@@ -167,11 +173,17 @@ git rebase --onto "$LATEST" HEAD~1
 git rev-list --count "$LATEST..HEAD"   # must print 1
 ```
 
-This branch touches:
+This branch touches (paths as of the v1.17.3 rebase, 2026-06-11):
 - `packages/opencode/src/provider/transform.ts` (cache TTL injection in `applyCaching`)
-- `packages/opencode/src/config/provider.ts` (schema field)
+- `packages/core/src/v1/config/provider.ts` (schema field; was
+  `packages/opencode/src/config/provider.ts` before upstream's core/v1 split —
+  git followed the rename automatically during the v1.17.3 rebase)
 - `packages/opencode/src/provider/provider.ts` (provider→model option fallback)
-- `packages/opencode/src/session/prompt.ts` (tool sorting)
+- `packages/opencode/src/session/tools.ts` (tool sorting; was
+  `packages/opencode/src/session/prompt.ts` until upstream extracted the
+  tool-building code into `tools.ts` — if it moves again, find the new home
+  with `git grep -n 'registry\.tools\|mcp\.tools()'` and re-apply both sort
+  hunks there: registry tools by `id`, MCP tool entries by key)
 - `packages/opencode/src/session/session.ts` (TTL-aware cost split in `getUsage`)
 - `packages/opencode/test/provider/transform.test.ts` (TTL tests)
 - `packages/opencode/test/session/usage-cache-cost.test.ts` (cost tests)
@@ -179,7 +191,13 @@ This branch touches:
 If `transform.ts` `applyCaching` was refactored upstream, re-apply the TTL
 read (`model.options?.["cacheTTL"]`) and the per-provider injection.  If
 `session.ts` `getUsage` shape changed, re-apply the cache_creation breakdown
-read + the 1.6× billing for the 1h portion.
+read + the 1.6× billing for the 1h portion (in the v1.17.3 shape, the
+TTL-split `cacheWriteCost` feeds upstream's cost expression, which also has a
+copilot `totalNanoAiu` short-circuit — keep both).
+
+After a large rebase, run `bun install` from the repo root before testing —
+1500+ upstream commits routinely add workspace dependencies, and the tests
+fail with `Cannot find package ...` until the lockfile is reinstalled.
 
 Verify by running the TTL + cost tests after rebase:
 
@@ -187,7 +205,8 @@ Verify by running the TTL + cost tests after rebase:
 ( cd packages/opencode && bun test test/provider/transform.test.ts test/session/usage-cache-cost.test.ts ) | tail -5
 ```
 
-Both files together should report ~227 pass / 0 fail.
+Both files together should report ~266 pass / 0 fail (the count drifts upward
+as upstream grows `transform.test.ts`; 0 fail is the invariant).
 
 ---
 
